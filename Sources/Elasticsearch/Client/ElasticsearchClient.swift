@@ -1,5 +1,6 @@
 import HTTP
 import DatabaseKit
+import Async
 
 /// A Elasticsearch client.
 public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
@@ -166,3 +167,99 @@ public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
         }
     }
 }
+
+/// Index Mgt
+extension ElasticsearchClient {
+    public func fetchIndex(name: String) -> Future<ElasticsearchIndex?> {
+        return ElasticsearchIndex.fetch(indexName: name, client: self)
+    }
+
+    public func configureIndex(name: String) -> ElasticsearchIndex {
+        return ElasticsearchIndex(indexName: name)
+    }
+
+    public func deleteIndex(name: String) -> Future<Void> {
+        return ElasticsearchIndex.delete(indexName: name, client: self)
+    }
+}
+
+/**
+ Search methods.
+ */
+extension ElasticsearchClient {
+    /// Execute a search in a given index
+    ///
+    /// - Parameters:
+    ///   - decodeTo: A struct or class that conforms to the Decodable protocol and can properly decode the documents stored in the index
+    ///   - index: The index to execute the query against
+    ///   - query: A SearchContainer object that specifies the query to execute
+    ///   - type: The index type (defaults to _doc)
+    ///   - routing: Routing information
+    /// - Returns: A Future SearchResponse
+    public func search<U: Decodable>(
+        decodeTo: U.Type,
+        index: String,
+        query: SearchContainer,
+        routing: String? = nil
+    ) -> Future<SearchResponse<U>> {
+        let body: Data
+        do {
+            body = try self.encoder.encode(query)
+        } catch {
+            return worker.future(error: error)
+        }
+
+        let url = ElasticsearchClient.generateURL(path: "/\(index)/_search", routing: routing)
+        guard let urlString = url.string else {
+            return worker.future(error: ElasticsearchError.report(error: .urlError))
+        }
+
+        return send(HTTPMethod.POST, to: urlString, with: body).map(to: SearchResponse.self) { jsonData in
+            let decoder = JSONDecoder()
+            if let aggregations = query.aggs {
+                if aggregations.count > 0 {
+                    decoder.userInfo(fromAggregations: aggregations)
+                }
+            }
+
+            if let jsonData = jsonData {
+                return try decoder.decode(SearchResponse<U>.self, from: jsonData)
+            }
+
+            throw ElasticsearchError.report(error: .searchFailed, attach: nil, statusCode: 404)
+        }
+    }
+}
+
+/**
+ Connection methods
+ */
+extension ElasticsearchClient {
+    /// Connects to a Elasticsearch server over HTTP.
+    ///
+    /// - Parameters:
+    ///   - config: The connection configuration to use
+    ///   - worker: The worker to execute with
+    /// - Returns: An ElasticsearchClient Future
+    public static func connect(
+        config: ElasticsearchClientConfig,
+        on worker: Worker
+    ) -> Future<ElasticsearchClient> {
+        let clientPromise = worker.eventLoop.newPromise(ElasticsearchClient.self)
+        let scheme: HTTPScheme = config.useSSL ? .https : .http
+        HTTPClient.connect(scheme: scheme, hostname: config.hostname, port: config.port, on: worker) { error in
+            let esError = ElasticsearchError(identifier: "connection_failed", reason: "Could not connect to Elasticsearch: " + error.localizedDescription, source: .capture())
+            clientPromise.fail(error: esError)
+        }.do() { client in
+            let esClient = ElasticsearchClient.init(client: client, config: config, worker: worker)
+            esClient.isConnected = true
+            clientPromise.succeed(result: esClient)
+        }.catch { error in
+            let esError = ElasticsearchError(identifier: "connection_failed", reason: "Could not connect to Elasticsearch: " + error.localizedDescription, source: .capture())
+            clientPromise.fail(error: esError)
+        }
+
+        return clientPromise.futureResult
+    }
+}
+
