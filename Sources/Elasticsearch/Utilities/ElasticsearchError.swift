@@ -80,7 +80,7 @@ public struct ElasticsearchError: Debuggable {
 }
 
 extension ElasticsearchError {
-    static func report(error identifier: ElasticsearchErrorIdentifier, attach description: String? = nil, statusCode: UInt? = nil) -> Self {
+    static func report(error identifier: ElasticsearchErrorIdentifier, attach description: String? = nil, statusCode: UInt? = nil) -> ElasticsearchError {
         return ElasticsearchError(identifier: identifier.localized, reason: "\(identifier.localizedDescription) + \(description ?? "")", source: .capture(), statusCode: statusCode)
     }
 }
