@@ -1,7 +1,7 @@
 import Debugging
 import COperatingSystem
 
-enum ElasticsearchErrorIdentifier: LocalizedError {
+public enum ElasticsearchErrorIdentifier: LocalizedError {
     case noActiveNodes
     case connectionFailed
     case emptyResponse
@@ -10,7 +10,7 @@ enum ElasticsearchErrorIdentifier: LocalizedError {
     case searchFailed
     case urlError
 
-    var localized: String {
+    public var localized: String {
         switch self {
         case .noActiveNodes:
             return "no_active_nodes"
@@ -29,7 +29,7 @@ enum ElasticsearchErrorIdentifier: LocalizedError {
         }
     }
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .noActiveNodes:
             return "No active available nodes in cluster"
@@ -80,7 +80,7 @@ public struct ElasticsearchError: Debuggable {
 }
 
 extension ElasticsearchError {
-    static func report(error identifier: ElasticsearchErrorIdentifier, attach description: String? = nil, statusCode: UInt? = nil) -> ElasticsearchError {
+    public static func report(error identifier: ElasticsearchErrorIdentifier, attach description: String? = nil, statusCode: UInt? = nil) -> ElasticsearchError {
         return ElasticsearchError(identifier: identifier.localized, reason: "\(identifier.localizedDescription) + \(description ?? "")", source: .capture(), statusCode: statusCode)
     }
 }
