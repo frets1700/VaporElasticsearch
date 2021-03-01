@@ -1,6 +1,54 @@
 import Debugging
 import COperatingSystem
 
+enum ElasticsearchErrorIdentifier: LocalizedError {
+    case noActiveNodes
+    case connectionFailed
+    case emptyResponse
+    case invalidResponse
+    case unknown
+    case searchFailed
+    case urlError
+
+    var localized: String {
+        switch self {
+        case .noActiveNodes:
+            return "no_active_nodes"
+        case .connectionFailed:
+            return "connection_failed"
+        case .emptyResponse:
+            return "empty_response"
+        case .invalidResponse:
+            return "invalid_response"
+        case .unknown:
+            return "es_error"
+        case .searchFailed:
+            return "search_failed"
+        case .urlError:
+            return "url_error"
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveNodes:
+            return "No active available nodes in cluster"
+        case .connectionFailed:
+            return "Could not connect to Elasticsearch"
+        case .emptyResponse:
+            return "Missing response body from Elasticsearch"
+        case .invalidResponse:
+            return "Cannot parse response body from Elasticsearch"
+        case .unknown:
+            return "Error"
+        case .searchFailed:
+            return "Could not execute search"
+        case .urlError:
+            return "Url error"
+        }
+    }
+}
+
 /// Errors that can be thrown while working with Elasticsearch.
 public struct ElasticsearchError: Debuggable {
     public static let readableName = "Elasticsearch Error"
@@ -28,5 +76,11 @@ public struct ElasticsearchError: Debuggable {
         self.possibleCauses = possibleCauses
         self.suggestedFixes = suggestedFixes
         self.statusCode = statusCode
+    }
+}
+
+extension ElasticsearchError {
+    static func report(error identifier: ElasticsearchErrorIdentifier, attach description: String? = nil, statusCode: UInt? = nil) -> Self {
+        return ElasticsearchError(identifier: identifier.localized, reason: "\(identifier.localizedDescription) + \(description ?? "")", source: .capture(), statusCode: statusCode)
     }
 }

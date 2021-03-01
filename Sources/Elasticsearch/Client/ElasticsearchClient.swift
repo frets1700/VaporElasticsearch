@@ -20,17 +20,17 @@ public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
     public var extend: Extend
     
     /// The HTTP connection
-    private let esConnection: HTTPClient
+    private var esConnection: HTTPClient?
     
     public let worker: Worker
+    public var isConnected: Bool
+
     internal let encoder = JSONEncoder()
     internal let decoder = JSONDecoder()
-    internal var isConnected: Bool
-    
     internal let config: ElasticsearchClientConfig
     
     /// Creates a new Elasticsearch client.
-    init(client: HTTPClient, config: ElasticsearchClientConfig, worker: Worker) {
+    public init(client: HTTPClient, config: ElasticsearchClientConfig, worker: Worker) {
         self.esConnection = client
         self.extend = [:]
         self.isClosed = false
@@ -42,12 +42,14 @@ public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
     /// Closes this client.
     public func close() {
         self.isClosed = true
-        esConnection.close().do() {
-            self.isClosed = true
-            self.isConnected = false
-        }.catch() { error in
-            self.isClosed = true
-            self.isConnected = false
+        esConnection?.close().do() {[weak self] in
+            self?.isClosed = true
+            self?.isConnected = false
+            self?.esConnection = nil
+        }.catch() {[weak self] error in
+            self?.isClosed = true
+            self?.isConnected = false
+            self?.esConnection = nil
         }
     }
 
@@ -62,18 +64,23 @@ public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
         var url = URLComponents()
         url.path = path
         var query = [URLQueryItem]()
+
         if routing != nil {
             query.append(URLQueryItem(name: "routing", value: routing))
         }
-        if version != nil {
-            query.append(URLQueryItem(name: "version", value: "\(version!)"))
+
+        if let version = version {
+            query.append(URLQueryItem(name: "version", value: "\(version)"))
         }
-        if storedFields != nil {
-            query.append(URLQueryItem(name: "stored_fields", value: storedFields?.joined(separator: ",")))
+
+        if let storeField = storedFields {
+            query.append(URLQueryItem(name: "stored_fields", value: storeField.joined(separator: ",")))
         }
-        if realtime != nil {
-            query.append(URLQueryItem(name: "realtime", value: realtime! ? "true" : "false"))
+
+        if let realtime = realtime {
+            query.append(URLQueryItem(name: "realtime", value: realtime ? "true" : "false"))
         }
+
         url.queryItems = query
         
         return url
@@ -116,37 +123,46 @@ public final class ElasticsearchClient: DatabaseConnection, BasicWorker {
         if request.headers.contains(name: "Content-Type") == false {
             request.headers.add(name: "Content-Type", value: "application/json")
         }
-        if self.config.username != nil && self.config.password != nil {
-            let token = "\(config.username!):\(config.password!)".data(using: String.Encoding.utf8)?.base64EncodedString()
-            if token != nil {
-                request.headers.add(name: "Authorization", value: "Basic \(token!)")
+
+        if let username = self.config.username, let password = self.config.password {
+            let token = "\(username):\(password)".data(using: String.Encoding.utf8)?.base64EncodedString()
+            if let token = token {
+                request.headers.add(name: "Authorization", value: "Basic \(token)")
             }
         }
 
         logger?.record(query: request.description)
-        
-        return self.esConnection.send(request).map(to: Data?.self) { response in
-            if response.body.data == nil {
-                throw ElasticsearchError(identifier: "empty_response", reason: "Missing response body from Elasticsearch", source: .capture())
-            }
 
+        guard let esConnection = self.esConnection else {
+            return future(error: ElasticsearchError.report(error: .connectionFailed))
+        }
+
+        return esConnection.send(request).map(to: Data?.self) {[weak self] response in
+            guard let responseData = response.body.data else {
+                throw ElasticsearchError.report(error: .emptyResponse)
+            }
+ 
             if response.status.code >= 400 {
-                guard let json = try JSONSerialization.jsonObject(with: response.body.data!, options: []) as? [String: Any] else {
-                    throw ElasticsearchError(identifier: "invalid_response", reason: "Cannot parse response body from Elasticsearch", source: .capture())
+                guard let json = try JSONSerialization.jsonObject(with: responseData, options: []) as? [String: Any] else {
+                    throw ElasticsearchError.report(error: .invalidResponse)
                 }
                 
                 if response.status.code == 404 {
                     return nil
                 }
-                
-                let error = json["error"] != nil ? (json["error"] as! Dictionary<String, Any>).description : ""
-                throw ElasticsearchError(identifier: "elasticsearch_error", reason: error, source: .capture(), statusCode: response.status.code)
+
+                var error = ""
+                if json["error"] != nil {
+                    error = (json["error"] as? Dictionary<String, Any>)?.description ?? ""
+                }
+
+                throw ElasticsearchError.report(error: .unknown, attach: error)
             }
             
-            let bodyString = String(data: response.body.data!, encoding: String.Encoding.utf8) as String?
-            self.logger?.record(query: bodyString ?? "")
+            let bodyString = String(data: responseData, encoding: String.Encoding.utf8) as String?
+            self?.logger?.record(query: bodyString ?? "")
             
-            return response.body.data!
+            return responseData
         }
     }
 }

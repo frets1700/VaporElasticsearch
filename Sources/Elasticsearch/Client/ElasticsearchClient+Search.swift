@@ -17,7 +17,6 @@ extension ElasticsearchClient {
         decodeTo: U.Type,
         index: String,
         query: SearchContainer,
-        type: String = "_doc",
         routing: String? = nil
     ) -> Future<SearchResponse<U>> {
         let body: Data
@@ -26,8 +25,13 @@ extension ElasticsearchClient {
         } catch {
             return worker.future(error: error)
         }
-        let url = ElasticsearchClient.generateURL(path: "/\(index)/\(type)/_search", routing: routing)
-        return send(HTTPMethod.POST, to: url.string!, with: body).map(to: SearchResponse.self) {jsonData in
+
+        let url = ElasticsearchClient.generateURL(path: "/\(index)/_search", routing: routing)
+        guard let urlString = url.string else {
+            return worker.future(error: ElasticsearchError.report(error: .urlError))
+        }
+
+        return send(HTTPMethod.POST, to: urlString, with: body).map(to: SearchResponse.self) { jsonData in
             let decoder = JSONDecoder()
             if let aggregations = query.aggs {
                 if aggregations.count > 0 {
@@ -38,8 +42,8 @@ extension ElasticsearchClient {
             if let jsonData = jsonData {
                 return try decoder.decode(SearchResponse<U>.self, from: jsonData)
             }
-            
-            throw ElasticsearchError(identifier: "search_failed", reason: "Could not execute search", source: .capture(), statusCode: 404)
+
+            throw ElasticsearchError.report(error: .searchFailed, attach: nil, statusCode: 404)
         }
     }
 }
